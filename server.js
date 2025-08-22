@@ -20,19 +20,12 @@ const PORT = process.env.PORT || 3001;
 const CHAT_ID = 'global_chatroom';
 
 // --- In-memory Data Store ---
-// In a real app, this would be a database
 const users = {}; // Stores active users { socketId: { id, name, avatar } }
 const messages = []; // Stores messages for the global chat room
 
 // --- API Endpoints ---
 app.get('/', (req, res) => res.send('Chat server is running!'));
-
-// Get all messages for the global chat
-app.get('/api/messages/global_chatroom', (req, res) => {
-  res.json(messages);
-});
-
-// Get all currently active users
+app.get('/api/messages/global_chatroom', (req, res) => res.json(messages));
 app.get('/api/users', (req, res) => {
     const activeUsers = Object.values(users).reduce((acc, user) => {
         acc[user.id] = user;
@@ -51,24 +44,17 @@ io.use((socket, next) => {
     next();
 });
 
-
 // --- Socket.IO Real-time Logic ---
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.user.name} (${socket.id})`);
-
-  // Store user details
   users[socket.id] = socket.user;
-
-  // Notify all other clients that a new user has joined
   socket.broadcast.emit('user joined', socket.user);
   
-  // Send the current list of active users to the newly connected client
   const activeUsers = Object.values(users).reduce((acc, u) => {
     acc[u.id] = u;
     return acc;
   }, {});
   socket.emit('active users', activeUsers);
-
 
   socket.on('joinRoom', (chatId) => {
     socket.join(chatId);
@@ -77,8 +63,9 @@ io.on('connection', (socket) => {
 
   socket.on('sendMessage', (data) => {
     const { chatId, message } = data;
-    messages.push(message); // Save message to our in-memory store
-    // Broadcast the message to everyone else in the room
+    // **THE FIX IS HERE:** The message object now contains all sender info.
+    // We just save it directly.
+    messages.push(message); 
     socket.to(chatId).emit('newMessage', message);
   });
 
@@ -88,16 +75,13 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     console.log(`User disconnected: ${socket.user.name} (${socket.id})`);
-    // Remove user from our store
     const disconnectedUser = users[socket.id];
     delete users[socket.id];
-    // Notify all other clients that this user has left
     if (disconnectedUser) {
         io.emit('user left', disconnectedUser.id);
     }
   });
 });
-
 
 // --- START THE SERVER ---
 server.listen(PORT, () => {
