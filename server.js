@@ -16,12 +16,19 @@ const io = new Server(server, {
   }
 });
 
-const PORT = process.env.PORT || 3001;
+// **THE FIX IS HERE:** We rely solely on the port provided by the environment (Render).
+// This is more stable for production deployments.
+const PORT = process.env.PORT;
+
+if (!PORT) {
+    throw new Error("PORT environment variable is not set. The application cannot start.");
+}
+
 const CHAT_ID = 'global_chatroom';
 
 // --- In-memory Data Store ---
-const users = {}; // Stores active users { socketId: { id, name, avatar } }
-const messages = []; // Stores messages for the global chat room
+const users = {}; 
+const messages = []; 
 
 // --- API Endpoints ---
 app.get('/', (req, res) => res.send('Chat server is running!'));
@@ -63,8 +70,6 @@ io.on('connection', (socket) => {
 
   socket.on('sendMessage', (data) => {
     const { chatId, message } = data;
-    // **THE FIX IS HERE:** The message object now contains all sender info.
-    // We just save it directly.
     messages.push(message); 
     socket.to(chatId).emit('newMessage', message);
   });
