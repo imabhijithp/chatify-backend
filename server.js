@@ -16,8 +16,6 @@ const io = new Server(server, {
   }
 });
 
-// **THE FIX IS HERE:** We rely solely on the port provided by the environment (Render).
-// This is more stable for production deployments.
 const PORT = process.env.PORT;
 
 if (!PORT) {
@@ -70,6 +68,8 @@ io.on('connection', (socket) => {
 
   socket.on('sendMessage', (data) => {
     const { chatId, message } = data;
+    // **DEBUG LOG ADDED HERE**
+    console.log(`Message received from ${message.sender.name}: "${message.content}"`);
     messages.push(message); 
     socket.to(chatId).emit('newMessage', message);
   });
