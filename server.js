@@ -6,107 +6,95 @@ const { Server } = require("socket.io");
 const cors = require('cors');
 
 const app = express();
-app.use(cors()); // Enable CORS for all routes
+app.use(cors());
 
 const server = http.createServer(app);
-
-// Initialize Socket.IO with CORS settings
 const io = new Server(server, {
   cors: {
-    origin: "*", // In production, you should restrict this to your frontend's URL
+    origin: "*",
     methods: ["GET", "POST"]
   }
 });
 
 const PORT = process.env.PORT || 3001;
+const CHAT_ID = 'global_chatroom';
 
-// --- MOCK DATA (same as frontend for consistency) ---
-const mockUsers = {
-  'user1': { name: 'You', avatar: 'https://placehold.co/100x100/3B82F6/FFFFFF?text=You' },
-  'user2': { name: 'Alice', avatar: 'https://placehold.co/100x100/F97316/FFFFFF?text=A' },
-  'user3': { name: 'Bob', avatar: 'https://placehold.co/100x100/10B981/FFFFFF?text=B' },
-};
+// --- In-memory Data Store ---
+// In a real app, this would be a database
+const users = {}; // Stores active users { socketId: { id, name, avatar } }
+const messages = []; // Stores messages for the global chat room
 
-const mockChats = [
-  { id: 'chat1', members: ['user1', 'user2'], lastMessage: 'Sounds good! See you then.', timestamp: '10:42 AM', unread: 0, typing: false, online: true, },
-  { id: 'chat2', members: ['user1', 'user3'], lastMessage: 'Can you send me the file?', timestamp: 'Yesterday', unread: 2, typing: true, online: false, },
-];
+// --- API Endpoints ---
+app.get('/', (req, res) => res.send('Chat server is running!'));
 
-const mockMessages = {
-  'chat1': [
-    { id: 'msg1', senderId: 'user2', content: 'Hey, are we still on for lunch tomorrow?', timestamp: '10:40 AM', status: 'seen' },
-    { id: 'msg2', senderId: 'user1', content: 'Yep! 1 PM at the usual spot.', timestamp: '10:41 AM', status: 'seen' },
-    { id: 'msg3', senderId: 'user2', content: 'Sounds good! See you then.', timestamp: '10:42 AM', status: 'sent' },
-  ],
-  'chat2': [
-    { id: 'msg4', senderId: 'user3', content: 'Hey, I need the report we discussed.', timestamp: 'Yesterday', status: 'seen' },
-    { id: 'msg5', senderId: 'user1', content: 'Sure, I\'m just finishing it up. I\'ll send it over in a bit.', timestamp: 'Yesterday', status: 'delivered' },
-    { id: 'msg6', senderId: 'user3', content: 'Thanks!', timestamp: 'Yesterday', status: 'seen' },
-    { id: 'msg7', senderId: 'user3', content: 'Can you send me the file?', timestamp: 'Yesterday', status: 'delivered' },
-  ],
-};
-// --- END MOCK DATA ---
-
-
-// --- API ENDPOINTS ---
-app.get('/', (req, res) => {
-  res.send('Chat server is running!');
+// Get all messages for the global chat
+app.get('/api/messages/global_chatroom', (req, res) => {
+  res.json(messages);
 });
 
-app.get('/api/chats', (req, res) => {
-  console.log('GET /api/chats');
-  res.json(mockChats);
-});
-
-app.get('/api/messages/:chatId', (req, res) => {
-  const { chatId } = req.params;
-  console.log(`GET /api/messages/${chatId}`);
-  res.json(mockMessages[chatId] || []);
-});
-
+// Get all currently active users
 app.get('/api/users', (req, res) => {
-    console.log('GET /api/users');
-    res.json(mockUsers);
+    const activeUsers = Object.values(users).reduce((acc, user) => {
+        acc[user.id] = user;
+        return acc;
+    }, {});
+    res.json(activeUsers);
+});
+
+// --- Socket.IO Middleware for Authentication ---
+io.use((socket, next) => {
+    const user = socket.handshake.auth.user;
+    if (!user || !user.id || !user.name) {
+        return next(new Error('Invalid user details'));
+    }
+    socket.user = user;
+    next();
 });
 
 
-// --- SOCKET.IO REAL-TIME LOGIC ---
+// --- Socket.IO Real-time Logic ---
 io.on('connection', (socket) => {
-  console.log(`A user connected: ${socket.id}`);
+  console.log(`User connected: ${socket.user.name} (${socket.id})`);
 
-  // When a user joins a specific chat room
+  // Store user details
+  users[socket.id] = socket.user;
+
+  // Notify all other clients that a new user has joined
+  socket.broadcast.emit('user joined', socket.user);
+  
+  // Send the current list of active users to the newly connected client
+  const activeUsers = Object.values(users).reduce((acc, u) => {
+    acc[u.id] = u;
+    return acc;
+  }, {});
+  socket.emit('active users', activeUsers);
+
+
   socket.on('joinRoom', (chatId) => {
     socket.join(chatId);
-    console.log(`User ${socket.id} joined room: ${chatId}`);
+    console.log(`${socket.user.name} joined room: ${chatId}`);
   });
 
-  // When a user sends a message
   socket.on('sendMessage', (data) => {
     const { chatId, message } = data;
-    console.log(`Message received for chat ${chatId}:`, message);
-    
-    // In a real app, you'd save this to the database here.
-    if(mockMessages[chatId]) {
-        mockMessages[chatId].push(message);
-    } else {
-        mockMessages[chatId] = [message];
-    }
-
-    // *** THE FIX IS HERE ***
-    // Broadcast the new message to everyone in the chat room EXCEPT the sender
+    messages.push(message); // Save message to our in-memory store
+    // Broadcast the message to everyone else in the room
     socket.to(chatId).emit('newMessage', message);
   });
 
-  // Handle typing indicators
   socket.on('typing', (data) => {
-    const { chatId, isTyping } = data;
-    // Broadcast to everyone in the room *except* the sender
-    socket.to(chatId).emit('typing', { isTyping, chatId });
+    socket.to(CHAT_ID).emit('typing', { user: socket.user, isTyping: data.isTyping });
   });
 
-  // When a user disconnects
   socket.on('disconnect', () => {
-    console.log(`User disconnected: ${socket.id}`);
+    console.log(`User disconnected: ${socket.user.name} (${socket.id})`);
+    // Remove user from our store
+    const disconnectedUser = users[socket.id];
+    delete users[socket.id];
+    // Notify all other clients that this user has left
+    if (disconnectedUser) {
+        io.emit('user left', disconnectedUser.id);
+    }
   });
 });
 
