@@ -1,4 +1,4 @@
-// ------------ FILE: server.js ------------
+// server.js
 
 const express = require('express');
 const http = require('http');
@@ -20,7 +20,7 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3001;
 
-// --- MOCK DATA ---
+// --- MOCK DATA (same as frontend for consistency) ---
 const mockUsers = {
   'user1': { name: 'You', avatar: 'https://placehold.co/100x100/3B82F6/FFFFFF?text=You' },
   'user2': { name: 'Alice', avatar: 'https://placehold.co/100x100/F97316/FFFFFF?text=A' },
@@ -54,15 +54,18 @@ app.get('/', (req, res) => {
 });
 
 app.get('/api/chats', (req, res) => {
+  console.log('GET /api/chats');
   res.json(mockChats);
 });
 
 app.get('/api/messages/:chatId', (req, res) => {
   const { chatId } = req.params;
+  console.log(`GET /api/messages/${chatId}`);
   res.json(mockMessages[chatId] || []);
 });
 
 app.get('/api/users', (req, res) => {
+    console.log('GET /api/users');
     res.json(mockUsers);
 });
 
@@ -71,26 +74,37 @@ app.get('/api/users', (req, res) => {
 io.on('connection', (socket) => {
   console.log(`A user connected: ${socket.id}`);
 
+  // When a user joins a specific chat room
   socket.on('joinRoom', (chatId) => {
     socket.join(chatId);
     console.log(`User ${socket.id} joined room: ${chatId}`);
   });
 
+  // When a user sends a message
   socket.on('sendMessage', (data) => {
     const { chatId, message } = data;
+    console.log(`Message received for chat ${chatId}:`, message);
+    
+    // In a real app, you'd save this to the database here.
     if(mockMessages[chatId]) {
         mockMessages[chatId].push(message);
     } else {
         mockMessages[chatId] = [message];
     }
-    io.to(chatId).emit('newMessage', message);
+
+    // *** THE FIX IS HERE ***
+    // Broadcast the new message to everyone in the chat room EXCEPT the sender
+    socket.to(chatId).emit('newMessage', message);
   });
 
+  // Handle typing indicators
   socket.on('typing', (data) => {
     const { chatId, isTyping } = data;
-    socket.to(chatId).emit('typing', { isTyping });
+    // Broadcast to everyone in the room *except* the sender
+    socket.to(chatId).emit('typing', { isTyping, chatId });
   });
 
+  // When a user disconnects
   socket.on('disconnect', () => {
     console.log(`User disconnected: ${socket.id}`);
   });
